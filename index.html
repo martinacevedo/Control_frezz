@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Súper Control - Gestión de Freezers</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, updateDoc, onSnapshot, collection, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyASy5Ro5CPBxEEl4NpBNj2rI5NkO4IDSu8",
+            authDomain: "control-de-frezzers.firebaseapp.com",
+            projectId: "control-de-frezzers",
+            storageBucket: "control-de-frezzers.firebasestorage.app",
+            messagingSenderId: "482812214745",
+            appId: "1:482812214745:web:9159a0c9edf3e6deeeedc8"
+        };
+
+        const appId = 'control-frezz-martin';
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        let state = {
+            freezers: [],
+            stats: { clean: 0, expired: 0, pending: 0 },
+            currentUser: null
+        };
+
+        const CLEANING_INTERVAL_DAYS = 30;
+
+        async function init() {
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    state.currentUser = user;
+                    startListening();
+                } else {
+                    await signInAnonymously(auth);
+                }
+            });
+        }
+
+        function startListening() {
+            const collectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'freezers');
+            onSnapshot(collectionRef, (snapshot) => {
+                state.freezers = snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
+                    .sort((a, b) => a.number - b.number);
+                updateStats();
+                render();
+            });
+        }
+
+        window.handleClean = async (number) => {
+            const fRef = doc(db, 'artifacts', appId, 'public', 'data', 'freezers', number.toString());
+            await updateDoc(fRef, { lastCleaned: new Date().toISOString() });
+        };
+
+        window.handleReset = async (number) => {
+            const fRef = doc(db, 'artifacts', appId, 'public', 'data', 'freezers', number.toString());
+            await updateDoc(fRef, { lastCleaned: null });
+        };
+
+        function updateStats() {
+            const now = new Date();
+            state.stats = { clean: 0, expired: 0, pending: 0 };
+            state.freezers.forEach(f => {
+                if (!f.lastCleaned) state.stats.pending++;
+                else {
+                    const diffDays = Math.ceil(Math.abs(now - new Date(f.lastCleaned)) / (1000 * 60 * 60 * 24));
+                    if (diffDays >= CLEANING_INTERVAL_DAYS) state.stats.expired++;
+                    else state.stats.clean++;
+                }
+            });
+        }
+
+        function render() {
+            const appDiv = document.getElementById('app');
+            const hNorth = state.freezers.filter(f => [1, 2].includes(f.number));
+            const aisleA = state.freezers.filter(f => f.number >= 3 && f.number <= 14);
+            const aisleB = state.freezers.filter(f => f.number >= 15 && f.number <= 26);
+            const hSouth = state.freezers.filter(f => [27, 28].includes(f.number));
+
+            appDiv.innerHTML = `
+                <header class="bg-slate-900 text-white px-6 py-4 sticky top-0 z-40 shadow-xl flex justify-between items-center print:bg-white print:text-black print:shadow-none print:border-b-2 print:border-black">
+                    <div class="flex items-center gap-2">
+                        <i data-lucide="snowflake" class="text-blue-400 print:text-black"></i>
+                        <h1 class="font-black uppercase italic">Control de Limpieza</h1>
+                    </div>
+                    <button onclick="window.print()" class="bg-blue-600 p-2 rounded-full print:hidden">
+                        <i data-lucide="printer" class="w-4 h-4 text-white"></i>
+                    </button>
+                </header>
+
+                <main class="max-w-5xl mx-auto p-4 space-y-6 pb-24 print:space-y-4">
+                    <div class="grid grid-cols-3 gap-3 print:gap-1">
+                        <div class="bg-emerald-100 border-2 border-emerald-600 rounded-2xl p-4 text-center print:bg-white print:border-black">
+                            <p class="text-[10px] font-black text-emerald-800 uppercase print:text-black">Limpios</p>
+                            <p class="text-3xl font-black text-emerald-900 print:text-black">${state.stats.clean}</p>
+                        </div>
+                        <div class="bg-red-100 border-2 border-red-600 rounded-2xl p-4 text-center print:bg-white print:border-black">
+                            <p class="text-[10px] font-black text-red-800 uppercase print:text-black">Vencidos</p>
+                            <p class="text-3xl font-black text-red-900 print:text-black">${state.stats.expired}</p>
+                        </div>
+                        <div class="bg-slate-200 border-2 border-slate-400 rounded-2xl p-4 text-center print:bg-white print:border-black">
+                            <p class="text-[10px] font-black text-slate-600 uppercase print:text-black">Pendientes</p>
+                            <p class="text-3xl font-black text-slate-800 print:text-black">${state.stats.pending}</p>
+                        </div>
+                    </div>
+
+                    <div class="space-y-8 print:space-y-4">
+                        <div class="text-center">
+                            <span class="text-[10px] font-black text-slate-400 uppercase tracking-[.2em] print:text-black">Cabecera Norte</span>
+                            <div class="flex gap-3 justify-center mt-2">${hNorth.map(card).join('')}</div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-4 print:gap-2">
+                            <div class="space-y-2">
+                                <span class="block text-center text-[9px] font-bold text-slate-400 uppercase print:text-black">Pasillo Izquierdo</span>
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 print:gap-1">${aisleA.map(card).join('')}</div>
+                            </div>
+                            <div class="space-y-2">
+                                <span class="block text-center text-[9px] font-bold text-slate-400 uppercase print:text-black">Pasillo Derecho</span>
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 print:gap-1">${aisleB.map(card).join('')}</div>
+                            </div>
+                        </div>
+
+                        <div class="text-center border-t pt-6 print:pt-2">
+                            <span class="text-[10px] font-black text-slate-400 uppercase tracking-[.2em] print:text-black">Cabecera Sur</span>
+                            <div class="flex gap-3 justify-center mt-2">${hSouth.map(card).join('')}</div>
+                        </div>
+                    </div>
+                </main>
+            `;
+            lucide.createIcons();
+        }
+
+        function card(f) {
+            const hasData = !!f.lastCleaned;
+            const dateStr = hasData ? new Date(f.lastCleaned).toLocaleDateString('es-AR') : 'PENDIENTE';
+            const diff = hasData ? Math.ceil(Math.abs(new Date() - new Date(f.lastCleaned)) / (1000 * 60 * 60 * 24)) : 999;
+            const isClean = diff < CLEANING_INTERVAL_DAYS;
+            
+            // Colores más fuertes para impresión
+            let borderClass = hasData ? (isClean ? "border-emerald-600" : "border-red-600") : "border-slate-300";
+            let badgeClass = hasData ? (isClean ? "bg-emerald-600 text-white" : "bg-red-600 text-white") : "bg-slate-200 text-slate-600";
+            let statusLabel = hasData ? (isClean ? "OK - LIMPIO" : "VENCIDO") : "PENDIENTE";
+
+            return `
+                <div class="bg-white border-2 ${borderClass} rounded-2xl p-4 shadow-sm flex flex-col justify-between min-h-[140px] w-full print:min-h-[100px] print:p-2 print:border-black print:shadow-none">
+                    <div class="flex justify-between items-start">
+                        <span class="font-black text-2xl text-slate-800 print:text-lg">#${f.number}</span>
+                        <div class="flex items-center gap-1">
+                            <span class="text-[7px] font-bold px-1.5 py-0.5 rounded ${badgeClass} print:bg-white print:text-black print:border print:border-black">
+                                ${statusLabel}
+                            </span>
+                            ${hasData ? `
+                                <button onclick="handleReset(${f.number})" class="text-slate-300 hover:text-red-500 print:hidden">
+                                    <i data-lucide="trash-2" class="w-3 h-3"></i>
+                                </button>
+                            ` : ''}
+                        </div>
+                    </div>
+                    <div class="mt-2 print:mt-1">
+                        <p class="text-[8px] text-slate-400 uppercase font-black print:text-black print:text-[7px]">Última Limpieza</p>
+                        <p class="text-xs font-bold text-slate-700 print:text-[10px]">${dateStr}</p>
+                    </div>
+                    <button onclick="handleClean(${f.number})" 
+                        class="mt-3 bg-blue-600 text-white text-[9px] font-black py-2 rounded-xl uppercase print:hidden shadow-md">
+                        Registrar
+                    </button>
+                </div>
+            `;
+        }
+
+        window.onload = init;
+    </script>
+    <style>
+        body { -webkit-tap-highlight-color: transparent; }
+        @media print {
+            @page { margin: 1cm; size: auto; }
+            body { background-color: white !important; }
+            .bg-emerald-100, .bg-red-100, .bg-slate-200 { background-color: white !important; }
+        }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div id="app">
+        <div class="flex flex-col items-center justify-center min-h-screen">
+            <div class="w-10 h-10 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin"></div>
+        </div>
+    </div>
+</body>
+</html>
